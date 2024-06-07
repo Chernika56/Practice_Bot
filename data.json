@@ -1,0 +1,22 @@
+[
+    {
+        "plc_id": 24,
+        "criteria": 60,
+        "tags": {
+            "open_price": 185,
+            "high_price": 186,
+            "low_price": 187,
+            "close_price": 188,
+            "value": 189
+        }
+    },
+    {
+        "plc_id": 1,
+        "criteria": 0,
+        "tags": {
+            "01Sell": 1,
+            "10Buy": 2,
+            "00NoSignal": 3
+        }
+    }
+]
