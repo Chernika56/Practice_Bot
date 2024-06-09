@@ -1,5 +1,4 @@
-﻿using System.Data;
-using System.Globalization;
+﻿using System.Globalization;
 using MySql.Data.MySqlClient;
 using Microsoft.Extensions.Configuration;
 using Newtonsoft.Json;
@@ -8,6 +7,9 @@ using Telegram.Bot;
 using Telegram.Bot.Polling;
 using Telegram.Bot.Types.Enums;
 
+/// <summary>
+/// The main program class that runs the Telegram bot.
+/// </summary>
 class Program
 {
     private static string settingsPath = "appsettings.json";
@@ -15,13 +17,18 @@ class Program
     private static ITelegramBotClient? botClient;
     public static List<long> subscribers = new();
 
+    /// <summary>
+    /// The main entry point for the application.
+    /// </summary>
     static void Main()
     {
+        // Create configuration from the appsettings.json file
         var builder = new ConfigurationBuilder()
                     .SetBasePath(Directory.GetCurrentDirectory())
                     .AddJsonFile(settingsPath, optional: false, reloadOnChange: true);
         var configuration = builder.Build();
-
+        
+        // Create a client for interacting with the Telegram API
         botClient = new TelegramBotClient(configuration["BotToken"]!);
         var cts = new CancellationTokenSource();
         var receiverOptions = new ReceiverOptions
@@ -29,76 +36,121 @@ class Program
             AllowedUpdates = Array.Empty<UpdateType>()
         };
 
+        // Start the process of receiving updates from Telegram
         botClient.StartReceiving(UpdateHandler, ErrorHandler, receiverOptions, cancellationToken: cts.Token);
         Console.WriteLine($"Starting Bot");
 
+        // Create a timer that will call the CallBack method every 30 minutes
         Timer timer = new Timer(CallBack!, null, TimeSpan.Zero, TimeSpan.FromMinutes(30));
 
         Console.ReadLine();
+
+        // Cancel operations when the program exits
+        cts.Cancel();
     }
 
-    private static async Task UpdateHandler(ITelegramBotClient client, Update update, CancellationToken token) 
+    /// <summary>
+    /// Handles updates from the Telegram bot.
+    /// </summary>
+    /// <param name="client">The Telegram bot client.</param>
+    /// <param name="update">The update received from Telegram.</param>
+    /// <param name="token">A cancellation token.</param>
+    private static async Task UpdateHandler(ITelegramBotClient client, Update update, CancellationToken token)
     {
         Console.WriteLine("Get Massage: " + update.Message?.Text ?? "[no text]");
-        if (update.Message?.Text == "/start") 
+        if (update.Message?.Text == "/start")
         {
             subscribers.Add(update.Message.Chat.Id);
-            await client.SendTextMessageAsync(update.Message.Chat.Id, "You have subscribed to the newsletter");
+            await client.SendTextMessageAsync(update.Message.Chat.Id, "You have subscribed to the alerts");
         }
-        else 
-        if (update.Message?.Text == "/stop") 
+        else
+        if (update.Message?.Text == "/stop")
         {
             subscribers.Remove(update.Message.Chat.Id);
-            await client.SendTextMessageAsync(update.Message.Chat.Id, "You have unsubscribed from the newsletter");
+            await client.SendTextMessageAsync(update.Message.Chat.Id, "You have unsubscribed from the alerts");
+        }
+        else
+        if (update.Message?.Text == "/help") 
+        {
+            await client.SendTextMessageAsync(update.Message.Chat.Id, "/start\n/stop\n/help");
         }
         await Task.CompletedTask;
     }
 
-    private static async Task ErrorHandler(ITelegramBotClient client, Exception exception, CancellationToken token) 
+    /// <summary>
+    /// Handles errors from the Telegram bot.
+    /// </summary>
+    /// <param name="client">The Telegram bot client.</param>
+    /// <param name="exception">The exception thrown.</param>
+    /// <param name="token">A cancellation token.</param>
+    private static async Task ErrorHandler(ITelegramBotClient client, Exception exception, CancellationToken token)
     {
         Console.WriteLine("Error: " + exception.Message);
         await Task.CompletedTask;
     }
 
+    // <summary>
+    /// Callback method that gets called periodically by the timer.
+    /// </summary>
+    /// <param name="state">The state object passed to the callback.</param>
     private static void CallBack(object state)
     {
-        MyMethod();
+        CheckAndSendAlerts();
     }
 
-    private async static void MyMethod()
+    /// <summary>
+    /// Checks database for new records and sends alerts if criteria are met.
+    /// </summary>
+    private async static void CheckAndSendAlerts()
     {
+        DateTime Now = DateTime.Now;
+
+        // Build configuration from appsettings.json file
         var builder = new ConfigurationBuilder()
                     .SetBasePath(Directory.GetCurrentDirectory())
                     .AddJsonFile(settingsPath, optional: false, reloadOnChange: true);
         var configuration = builder.Build();
 
+        // Get the connection string from the configuration
         string? connectionString = configuration.GetConnectionString("DefaultConnection");
 
+        // Read database access details
         string json = System.IO.File.ReadAllText(dataPath);
         List<TagInfo>? tagInfoList = JsonConvert.DeserializeObject<List<TagInfo>>(json);
 
+        // Open a connection to the MySQL database
         using (MySqlConnection connection = new MySqlConnection(connectionString))
         {
             try
             {
                 float value = 0;
                 string? plc_name = "";
-                string? dateTime = "";
+                DateTime dateTime = DateTime.MinValue;
 
+                // Open the database connection
                 connection.Open();
                 Console.WriteLine("Connection successful!");
 
+                // Iterate over each TagInfo object in the list
                 foreach (var tagInfo in tagInfoList!)
+                    // Iterate over each tag within the TagInfo object
                     foreach (var tag in tagInfo.tags!)
                     {
-                        string request = @"SELECT value FROM record WHERE tag_id = @tag_id ORDER BY created_at DESC LIMIT 1";
+                        // Construct SQL query to retrieve the latest record for the tag
+                        string request = @"SELECT * FROM record WHERE tag_id = @tag_id ORDER BY created_at DESC LIMIT 1";
                         MySqlCommand command = new MySqlCommand(request, connection);
                         command.Parameters.AddWithValue("@tag_id", tag.Value);
 
+                        // Execute the SQL query
                         using (MySqlDataReader reader = command.ExecuteReader())
                         {
-                            if (reader.Read())
+                            // Read the result set
+                            while (await reader.ReadAsync())
                             {
+                                // Retrieve the timestamp of the latest record
+                                dateTime = reader.GetDateTime("created_at");
+
+                                // Retrieve the timestamp of the latest record
                                 if (float.TryParse(reader["value"].ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out float result))
                                 {
                                     value = result;
@@ -106,36 +158,34 @@ class Program
                             }
                         }
 
-                        request = @"SELECT name FROM plc WHERE id = @plc_id";
-                        command = new MySqlCommand(request, connection);
-                        command.Parameters.AddWithValue("plc_id", tagInfo.plc_id);
-
-                        using (MySqlDataReader reader = command.ExecuteReader())
+                        // Check if the value exceeds the criteria and if the record is recent
+                        if ((value > tagInfo.criteria) && ((Now - dateTime) < TimeSpan.FromMinutes(30)))
                         {
-                            if (reader.Read())
+                            // Construct SQL query to retrieve the PLC name
+                            request = @"SELECT name FROM plc WHERE id = @plc_id";
+                            command = new MySqlCommand(request, connection);
+                            command.Parameters.AddWithValue("plc_id", tagInfo.plc_id);
+
+                            // Execute the SQL query
+                            using (MySqlDataReader reader = command.ExecuteReader())
                             {
-                                plc_name = reader["name"].ToString();
+                                // Read the result set
+                                while (await reader.ReadAsync())
+                                {
+                                    // Retrieve the PLC name
+                                    plc_name = reader["name"].ToString();
+                                }
                             }
-                        }
 
-                        request = @"SELECT created_at FROM record WHERE tag_id = @tag_id AND value = @value";
-                        command = new MySqlCommand(request, connection);
-                        command.Parameters.AddWithValue("@tag_id", tag.Value);
-                        command.Parameters.AddWithValue("@value", value);
+                            // Construct the output message
+                            string outputString = $"VolumeSignalsFact {plc_name}. Ожидается {tag.Key}. Вероятность {value}%";
 
-                        using (MySqlDataReader reader = command.ExecuteReader())
-                        {
-                            if (reader.Read())
-                            {
-                                dateTime = reader["created_at"].ToString();
-                            }
-                        }
+                            // Log the output message
+                            Console.WriteLine(outputString);
 
-                        if (value > tagInfo.criteria)
-                        {
+                            // Send the output message to all subscribers
                             foreach (var subscriber in subscribers)
-                                await botClient!.SendTextMessageAsync(subscriber, $"{plc_name}: Expected {tag.Key} {value}, {dateTime}");
-                            Console.WriteLine($"{plc_name}: Expected {tag.Key} {value}, {dateTime}");
+                                await botClient!.SendTextMessageAsync(subscriber, outputString);
                         }
                     }
             }
