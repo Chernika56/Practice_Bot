@@ -11,8 +11,7 @@ using Telegram.Bot.Types.Enums;
 /// The main program class that runs the Telegram bot.
 /// </summary>
 class Program
-{ 
-    123
+{
     private static string settingsPath = "appsettings.json";
     private static string dataPath = "data.json";
     private static ITelegramBotClient? botClient;
