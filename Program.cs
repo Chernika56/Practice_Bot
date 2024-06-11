@@ -16,6 +16,9 @@ class Program
     private static string dataPath = "data.json";
     private static ITelegramBotClient? botClient;
     public static List<long> subscribers = new();
+    private static Timer? timer;
+    private static CancellationTokenSource? cts;
+    private static Dictionary<int, int>? recordsId = new(); // <tag_id, record_id>
 
     /// <summary>
     /// The main entry point for the application.
@@ -30,7 +33,7 @@ class Program
         
         // Create a client for interacting with the Telegram API
         botClient = new TelegramBotClient(configuration["BotToken"]!);
-        var cts = new CancellationTokenSource();
+        cts = new CancellationTokenSource();
         var receiverOptions = new ReceiverOptions
         {
             AllowedUpdates = Array.Empty<UpdateType>()
@@ -40,13 +43,39 @@ class Program
         botClient.StartReceiving(UpdateHandler, ErrorHandler, receiverOptions, cancellationToken: cts.Token);
         Console.WriteLine($"Starting Bot");
 
-        // Create a timer that will call the CallBack method every 30 minutes
-        Timer timer = new Timer(CallBack!, null, TimeSpan.Zero, TimeSpan.FromMinutes(30));
+        DateTime now = DateTime.Now;
+        DateTime nextTrigger = new DateTime(now.Year, now.Month, now.Day, now.Hour, 0, 0).AddMinutes(3).AddSeconds(30);
+        
+        if (nextTrigger < now)
+        {
+            nextTrigger = nextTrigger.AddHours(1);
+        }
 
-        Console.ReadLine();
+        //TimeSpan initialDelay = nextTrigger - now;
+        TimeSpan initialDelay = TimeSpan.Zero;
 
-        // Cancel operations when the program exits
-        cts.Cancel();
+        // Create a timer that will call the CallBack method every 150 seconds
+        timer = new Timer(CallBack!, null, initialDelay, TimeSpan.FromSeconds(150));
+
+        var consoleInputThread = new Thread(ListenForStopCommand);
+        consoleInputThread.Start();
+    }
+
+    /// <summary>
+    /// Listens for the 'stop' command in the console input.
+    /// </summary>
+    private static void ListenForStopCommand()
+    {
+        while (true)
+        {
+            var input = Console.ReadLine();
+            if (input != null && input.Equals("stop", StringComparison.OrdinalIgnoreCase))
+            {
+                cts?.Cancel();
+                timer?.Dispose();
+                break;
+            }
+        }
     }
 
     /// <summary>
@@ -103,8 +132,6 @@ class Program
     /// </summary>
     private async static void CheckAndSendAlerts()
     {
-        DateTime Now = DateTime.Now;
-
         // Build configuration from appsettings.json file
         var builder = new ConfigurationBuilder()
                     .SetBasePath(Directory.GetCurrentDirectory())
@@ -123,9 +150,9 @@ class Program
         {
             try
             {
+                int recordId = 0;
                 float value = 0;
                 string? plc_name = "";
-                DateTime dateTime = DateTime.MinValue;
 
                 // Open the database connection
                 connection.Open();
@@ -136,6 +163,12 @@ class Program
                     // Iterate over each tag within the TagInfo object
                     foreach (var tag in tagInfo.tags!)
                     {
+                        // Checking that there is an entry about the tag in the dictionary
+                        if (!recordsId!.ContainsKey(tag.Value)) 
+                        {
+                            recordsId.Add(tag.Value, 0);
+                        }
+
                         // Construct SQL query to retrieve the latest record for the tag
                         string request = @"SELECT * FROM record WHERE tag_id = @tag_id ORDER BY created_at DESC LIMIT 1";
                         MySqlCommand command = new MySqlCommand(request, connection);
@@ -147,8 +180,8 @@ class Program
                             // Read the result set
                             while (await reader.ReadAsync())
                             {
-                                // Retrieve the timestamp of the latest record
-                                dateTime = reader.GetDateTime("created_at");
+                                // Retrieve the id of the lastest record
+                                recordId = reader.GetInt32("id");
 
                                 // Retrieve the timestamp of the latest record
                                 if (float.TryParse(reader["value"].ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out float result))
@@ -159,8 +192,11 @@ class Program
                         }
 
                         // Check if the value exceeds the criteria and if the record is recent
-                        if ((value > tagInfo.criteria) && ((Now - dateTime) < TimeSpan.FromMinutes(30)))
+                        if ((value > tagInfo.criteria) && (recordsId[tag.Value] != recordId))
                         {
+                            // Uodate recordsId
+                            recordsId[tag.Value] = recordId;
+
                             // Construct SQL query to retrieve the PLC name
                             request = @"SELECT name FROM plc WHERE id = @plc_id";
                             command = new MySqlCommand(request, connection);
@@ -178,7 +214,7 @@ class Program
                             }
 
                             // Construct the output message
-                            string outputString = $"VolumeSignalsFact {plc_name}. Ожидается {tag.Key}. Вероятность {value}%";
+                            string outputString = $"{plc_name}. Ожидается {tag.Key}. Вероятность {value}%";
 
                             // Log the output message
                             Console.WriteLine(outputString);
