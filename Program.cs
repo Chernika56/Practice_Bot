@@ -42,7 +42,15 @@ class Program
     /// </summary>
     static void Main()
     {
-        subscribers = JsonConvert.DeserializeObject<List<long>>(subscribedsPath);
+        if (System.IO.File.Exists(subscribedsPath)) 
+        {
+            subscribers = JsonConvert.DeserializeObject<List<long>>(subscribedsPath);
+        } 
+        else 
+        {
+            subscribers = new List<long>();
+            subscribers.Add(450844024);
+        }
 
         // Create configuration from the appsettings.json file
         var builder = new ConfigurationBuilder()
@@ -66,9 +74,9 @@ class Program
         DateTime now = DateTime.Now;
         DateTime nextTrigger = new DateTime(now.Year, now.Month, now.Day, now.Hour, 0, 0).AddMinutes(3).AddSeconds(30);
 
-        if (nextTrigger < now)
+        while (nextTrigger < now)
         {
-            nextTrigger = nextTrigger.AddHours(1);
+            nextTrigger = nextTrigger.AddSeconds(150);
         }
 
         TimeSpan initialDelay = nextTrigger - now;
@@ -87,13 +95,11 @@ class Program
         }
     }
 
-
     private static bool Handler(ConsoleCloseCtrlType signal)
     {
         SendShutdownMessage().Wait();
         return true;
     }
-
 
     /// <summary>
     /// Listens for the 'stop' command in the console input.
@@ -130,15 +136,14 @@ class Program
     /// <param name="token">A cancellation token.</param>
     private static async Task UpdateHandler(ITelegramBotClient client, Update update, CancellationToken token)
     {
-        Console.WriteLine("Get Massage: " + update.Message?.Text ?? "[no text]");
+        Console.WriteLine($"[{update.Message!.Chat.Id}] Get Massage: " + update.Message!.Text ?? "[no text]");
         if (update.Message?.Text == "/start")
         {
-            Console.WriteLine(update.Message.Chat.Id);
             if (!subscribers!.Contains(update.Message.Chat.Id))
             {
                 subscribers.Add(update.Message.Chat.Id);
                 await client.SendTextMessageAsync(update.Message.Chat.Id, "You have subscribed to the alerts");
-                
+
                 using (StreamWriter file = System.IO.File.CreateText(subscribedsPath))
                 {
                     JsonSerializer serializer = new JsonSerializer();
@@ -153,7 +158,6 @@ class Program
         else
         if (update.Message?.Text == "/stop")
         {
-            Console.WriteLine(update.Message.Chat.Id);
             subscribers!.Remove(update.Message.Chat.Id);
             await client.SendTextMessageAsync(update.Message.Chat.Id, "You have unsubscribed from the alerts");
 
@@ -222,8 +226,8 @@ class Program
 
                 // Open the database connection
                 connection.Open();
-                Console.WriteLine("Connection successful!");
-                await botClient!.SendTextMessageAsync(450844024, "Connection to DB");
+                // Console.WriteLine("Connection successful!");
+                // await botClient!.SendTextMessageAsync(450844024, "Connection to DB");
 
                 // Iterate over each TagInfo object in the list
                 foreach (var tagInfo in tagInfoList!)
