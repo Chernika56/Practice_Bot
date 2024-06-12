@@ -30,8 +30,9 @@ class Program
 
     private static string settingsPath = "appsettings.json";
     private static string dataPath = "data.json";
+    private static string subscribedsPath = "subscribers.json";
     private static ITelegramBotClient? botClient;
-    public static List<long> subscribers = new();
+    public static List<long>? subscribers;
     private static Timer? timer;
     private static CancellationTokenSource? cts;
     private static Dictionary<int, int>? recordsId = new(); // <tag_id, record_id>
@@ -41,7 +42,7 @@ class Program
     /// </summary>
     static void Main()
     {
-        subscribers.Add(450844024);
+        subscribers = JsonConvert.DeserializeObject<List<long>>(subscribedsPath);
 
         // Create configuration from the appsettings.json file
         var builder = new ConfigurationBuilder()
@@ -115,7 +116,7 @@ class Program
     private async static Task SendShutdownMessage()
     {
         string shutdownMessage = "Bot is shutting down";
-        foreach (var subscriber in subscribers)
+        foreach (var subscriber in subscribers!)
         {
             await botClient!.SendTextMessageAsync(subscriber, shutdownMessage);
         }
@@ -133,12 +134,18 @@ class Program
         if (update.Message?.Text == "/start")
         {
             Console.WriteLine(update.Message.Chat.Id);
-            if (!subscribers.Contains(update.Message.Chat.Id)) 
+            if (!subscribers!.Contains(update.Message.Chat.Id))
             {
                 subscribers.Add(update.Message.Chat.Id);
                 await client.SendTextMessageAsync(update.Message.Chat.Id, "You have subscribed to the alerts");
-            } 
-            else 
+                
+                using (StreamWriter file = System.IO.File.CreateText(subscribedsPath))
+                {
+                    JsonSerializer serializer = new JsonSerializer();
+                    serializer.Serialize(file, subscribers);
+                }
+            }
+            else
             {
                 await client.SendTextMessageAsync(update.Message.Chat.Id, "You have already subscribed to the alerts");
             }
@@ -146,8 +153,15 @@ class Program
         else
         if (update.Message?.Text == "/stop")
         {
-            subscribers.Remove(update.Message.Chat.Id);
+            Console.WriteLine(update.Message.Chat.Id);
+            subscribers!.Remove(update.Message.Chat.Id);
             await client.SendTextMessageAsync(update.Message.Chat.Id, "You have unsubscribed from the alerts");
+
+            using (StreamWriter file = System.IO.File.CreateText(subscribedsPath))
+            {
+                JsonSerializer serializer = new JsonSerializer();
+                serializer.Serialize(file, subscribers);
+            }
         }
         else
         if (update.Message?.Text == "/help")
@@ -275,7 +289,7 @@ class Program
                             Console.WriteLine(outputString);
 
                             // Send the output message to all subscribers
-                            foreach (var subscriber in subscribers)
+                            foreach (var subscriber in subscribers!)
                                 await botClient!.SendTextMessageAsync(subscriber, outputString);
                         }
                     }
