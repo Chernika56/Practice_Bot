@@ -30,9 +30,9 @@ class Program
 
     private static string settingsPath = "appsettings.json";
     private static string dataPath = "data.json";
-    private static string subscribedsPath = "subscribers.json";
+    private static string subscribersPath = "subscribers.json";
     private static ITelegramBotClient? botClient;
-    public static List<long>? subscribers;
+    public static List<long>? subscribers = new();
     private static Timer? timer;
     private static CancellationTokenSource? cts;
     private static Dictionary<int, int>? recordsId = new(); // <tag_id, record_id>
@@ -42,14 +42,23 @@ class Program
     /// </summary>
     static void Main()
     {
-        if (System.IO.File.Exists(subscribedsPath)) 
+        if (System.IO.File.Exists(subscribersPath))
         {
-            subscribers = JsonConvert.DeserializeObject<List<long>>(subscribedsPath);
-        } 
-        else 
+            try
+            {
+                string json = System.IO.File.ReadAllText(subscribersPath);
+                subscribers = JsonConvert.DeserializeObject<List<long>>(json) ?? new List<long>();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error loading subscribers: {ex.Message}");
+                subscribers = new List<long>();
+            }
+        }
+        else
         {
+            Console.WriteLine("Subscribers file not found.");
             subscribers = new List<long>();
-            subscribers.Add(450844024);
         }
 
         // Create configuration from the appsettings.json file
@@ -144,7 +153,7 @@ class Program
                 subscribers.Add(update.Message.Chat.Id);
                 await client.SendTextMessageAsync(update.Message.Chat.Id, "You have subscribed to the alerts");
 
-                using (StreamWriter file = System.IO.File.CreateText(subscribedsPath))
+                using (StreamWriter file = System.IO.File.CreateText(subscribersPath))
                 {
                     JsonSerializer serializer = new JsonSerializer();
                     serializer.Serialize(file, subscribers);
@@ -161,7 +170,7 @@ class Program
             subscribers!.Remove(update.Message.Chat.Id);
             await client.SendTextMessageAsync(update.Message.Chat.Id, "You have unsubscribed from the alerts");
 
-            using (StreamWriter file = System.IO.File.CreateText(subscribedsPath))
+            using (StreamWriter file = System.IO.File.CreateText(subscribersPath))
             {
                 JsonSerializer serializer = new JsonSerializer();
                 serializer.Serialize(file, subscribers);
