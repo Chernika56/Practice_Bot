@@ -6,12 +6,28 @@ using Telegram.Bot.Types;
 using Telegram.Bot;
 using Telegram.Bot.Polling;
 using Telegram.Bot.Types.Enums;
+using System.Runtime.InteropServices;
 
 /// <summary>
 /// The main program class that runs the Telegram bot.
 /// </summary>
 class Program
 {
+    private enum ConsoleCloseCtrlType
+    {
+        CTRL_C_EVENT = 0,
+        CTRL_BREAK_EVENT = 1,
+        CTRL_CLOSE_EVENT = 2,
+        CTRL_LOGOFF_EVENT = 5,
+        CTRL_SHUTDOWN_EVENT = 6
+    }
+
+    private delegate bool EventHandler(ConsoleCloseCtrlType signal);
+
+    [DllImport("Kernel32")]
+    private static extern bool SetConsoleCtrlHandler(EventHandler handler, bool add);
+    private static EventHandler? handler;
+
     private static string settingsPath = "appsettings.json";
     private static string dataPath = "data.json";
     private static ITelegramBotClient? botClient;
@@ -25,12 +41,14 @@ class Program
     /// </summary>
     static void Main()
     {
+        subscribers.Add(450844024);
+
         // Create configuration from the appsettings.json file
         var builder = new ConfigurationBuilder()
                     .SetBasePath(Directory.GetCurrentDirectory())
                     .AddJsonFile(settingsPath, optional: false, reloadOnChange: true);
         var configuration = builder.Build();
-        
+
         // Create a client for interacting with the Telegram API
         botClient = new TelegramBotClient(configuration["BotToken"]!);
         cts = new CancellationTokenSource();
@@ -42,24 +60,39 @@ class Program
         // Start the process of receiving updates from Telegram
         botClient.StartReceiving(UpdateHandler, ErrorHandler, receiverOptions, cancellationToken: cts.Token);
         Console.WriteLine($"Starting Bot");
+        botClient!.SendTextMessageAsync(450844024, "Starting Bot");
 
         DateTime now = DateTime.Now;
         DateTime nextTrigger = new DateTime(now.Year, now.Month, now.Day, now.Hour, 0, 0).AddMinutes(3).AddSeconds(30);
-        
+
         if (nextTrigger < now)
         {
             nextTrigger = nextTrigger.AddHours(1);
         }
 
-        //TimeSpan initialDelay = nextTrigger - now;
-        TimeSpan initialDelay = TimeSpan.Zero;
+        TimeSpan initialDelay = nextTrigger - now;
+        //TimeSpan initialDelay = TimeSpan.Zero;
 
         // Create a timer that will call the CallBack method every 150 seconds
         timer = new Timer(CallBack!, null, initialDelay, TimeSpan.FromSeconds(150));
 
         var consoleInputThread = new Thread(ListenForStopCommand);
         consoleInputThread.Start();
+
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            handler += new EventHandler(Handler);
+            SetConsoleCtrlHandler(handler, true);
+        }
     }
+
+
+    private static bool Handler(ConsoleCloseCtrlType signal)
+    {
+        SendShutdownMessage().Wait();
+        return true;
+    }
+
 
     /// <summary>
     /// Listens for the 'stop' command in the console input.
@@ -73,8 +106,18 @@ class Program
             {
                 cts?.Cancel();
                 timer?.Dispose();
+                SendShutdownMessage().Wait();
                 break;
             }
+        }
+    }
+
+    private async static Task SendShutdownMessage()
+    {
+        string shutdownMessage = "Bot is shutting down";
+        foreach (var subscriber in subscribers)
+        {
+            await botClient!.SendTextMessageAsync(subscriber, shutdownMessage);
         }
     }
 
@@ -89,8 +132,16 @@ class Program
         Console.WriteLine("Get Massage: " + update.Message?.Text ?? "[no text]");
         if (update.Message?.Text == "/start")
         {
-            subscribers.Add(update.Message.Chat.Id);
-            await client.SendTextMessageAsync(update.Message.Chat.Id, "You have subscribed to the alerts");
+            Console.WriteLine(update.Message.Chat.Id);
+            if (!subscribers.Contains(update.Message.Chat.Id)) 
+            {
+                subscribers.Add(update.Message.Chat.Id);
+                await client.SendTextMessageAsync(update.Message.Chat.Id, "You have subscribed to the alerts");
+            } 
+            else 
+            {
+                await client.SendTextMessageAsync(update.Message.Chat.Id, "You have already subscribed to the alerts");
+            }
         }
         else
         if (update.Message?.Text == "/stop")
@@ -99,7 +150,7 @@ class Program
             await client.SendTextMessageAsync(update.Message.Chat.Id, "You have unsubscribed from the alerts");
         }
         else
-        if (update.Message?.Text == "/help") 
+        if (update.Message?.Text == "/help")
         {
             await client.SendTextMessageAsync(update.Message.Chat.Id, "/start\n/stop\n/help");
         }
@@ -153,10 +204,12 @@ class Program
                 int recordId = 0;
                 float value = 0;
                 string? plc_name = "";
+                DateTime dateTime = DateTime.MinValue;
 
                 // Open the database connection
                 connection.Open();
                 Console.WriteLine("Connection successful!");
+                await botClient!.SendTextMessageAsync(450844024, "Connection to DB");
 
                 // Iterate over each TagInfo object in the list
                 foreach (var tagInfo in tagInfoList!)
@@ -164,7 +217,7 @@ class Program
                     foreach (var tag in tagInfo.tags!)
                     {
                         // Checking that there is an entry about the tag in the dictionary
-                        if (!recordsId!.ContainsKey(tag.Value)) 
+                        if (!recordsId!.ContainsKey(tag.Value))
                         {
                             recordsId.Add(tag.Value, 0);
                         }
@@ -180,6 +233,8 @@ class Program
                             // Read the result set
                             while (await reader.ReadAsync())
                             {
+                                dateTime = reader.GetDateTime("created_at");
+
                                 // Retrieve the id of the lastest record
                                 recordId = reader.GetInt32("id");
 
@@ -214,7 +269,7 @@ class Program
                             }
 
                             // Construct the output message
-                            string outputString = $"{plc_name}. Ожидается {tag.Key}. Вероятность {value}%";
+                            string outputString = $"{plc_name}. Ожидается {tag.Key}. Вероятность {value}%.";
 
                             // Log the output message
                             Console.WriteLine(outputString);
